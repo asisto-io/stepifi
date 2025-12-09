@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcursor1 \
     libxft2 \
     libxinerama1 \
+    procps \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -30,7 +31,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install FreeCAD via micromamba
+# Install FreeCAD
 RUN micromamba install -y -n base -c conda-forge freecad=0.21.2 \
     && micromamba clean --all --yes
 
@@ -38,22 +39,20 @@ ENV PATH="/opt/conda/bin:$PATH"
 ENV QT_QPA_PLATFORM=offscreen
 ENV FREECAD_USER_HOME=/tmp
 
-# Copy node_modules from builder
+# Copy app files
 COPY --from=builder /build/node_modules ./node_modules
-
-# Copy backend and frontend
 COPY src ./src
-COPY package.json .
 COPY public ./public
+COPY package.json .
 COPY logo.png .
 COPY README.md .
 
-# Create required folders
+# Create runtime dirs
 RUN mkdir -p uploads converted logs /tmp/runtime \
     && chmod 777 uploads converted logs \
     && chmod 700 /tmp/runtime
 
-EXPOSE 3000 3001
+EXPOSE 3000
 
-# FIXED CMD — MUST BE EXACTLY THIS
-CMD ["micromamba", "run", "-n", "base", "node", "src/server.js"]
+# 🚨 THIS IS 100% CORRECT — DO NOT CHANGE IT
+CMD ["sh", "-c", "micromamba run -n base node src/server.js"]
