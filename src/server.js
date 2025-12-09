@@ -18,6 +18,9 @@ const conversionRoutes = require('./routes/conversion.routes');
 
 const app = express();
 
+// ----------------------
+// FIXED AND WORKING CSP
+// ----------------------
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -25,36 +28,42 @@ app.use(
       directives: {
         defaultSrc: ["'self'"],
 
-        // Allow scripts from local + CDNs
         scriptSrc: [
           "'self'",
           "'unsafe-inline'",
           "https://cdnjs.cloudflare.com",
-          "https://cdn.jsdelivr.net"
+          "https://cdn.jsdelivr.net",
+          "https://cdn.jsdelivr.net/npm",
         ],
 
-        // Allow styles from local + Google Fonts + CDN
         styleSrc: [
           "'self'",
           "'unsafe-inline'",
           "https://cdnjs.cloudflare.com",
-          "https://fonts.googleapis.com"
+          "https://fonts.googleapis.com",
         ],
 
-        // Allow Google Fonts + CDN fonts
         fontSrc: [
           "'self'",
           "https://fonts.gstatic.com",
-          "https://cdnjs.cloudflare.com"
+          "https://cdnjs.cloudflare.com",
         ],
 
-        imgSrc: ["'self'", "data:", "blob:"],
+        imgSrc: [
+          "'self'",
+          "data:",
+          "blob:",
+        ],
 
-        connectSrc: ["'self'"],
+        connectSrc: [
+          "'self'",
+        ],
 
-        workerSrc: ["'self'", "blob:"]
-      }
-    }
+        workerSrc: ["'self'", "blob:"],
+        frameSrc: ["'self'"],
+        objectSrc: ["'none'"],
+      },
+    },
   })
 );
 
@@ -67,7 +76,7 @@ const limiter = rateLimit({
   max: config.rateLimit.max,
   message: { success: false, error: 'Too many requests, please try again later' },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
 });
 
 app.use('/api/', limiter);
@@ -91,23 +100,23 @@ app.get('/health', async (req, res) => {
     services: {
       redis: redisHealthy ? 'connected' : 'disconnected',
       freecad: freecadCheck.available ? 'available' : 'not found',
-      freecadVersion: freecadCheck.version || null
+      freecadVersion: freecadCheck.version || null,
     },
     config: {
       maxFileSize: `${Math.round(config.upload.maxFileSize / 1024 / 1024)}MB`,
       jobTTL: `${config.jobs.ttlHours} hours`,
-      defaultTolerance: config.conversion.defaultTolerance
-    }
+      defaultTolerance: config.conversion.defaultTolerance,
+    },
   });
 });
 
-// System stats
+// Stats endpoint
 app.get('/api/stats', async (req, res) => {
   try {
     const cleanupStats = await cleanupService.getStats();
     res.json({
       success: true,
-      stats: cleanupStats
+      stats: cleanupStats,
     });
   } catch (err) {
     logger.error('Stats error:', err);
@@ -126,12 +135,15 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, error: 'Internal server error' });
 });
 
-// Start server
+// -----------------------
+// Server startup function
+// -----------------------
 async function start() {
   try {
     await fileService.ensureDirectories();
 
     redisService.connect();
+
     const queue = queueService.initialize();
 
     const serverAdapter = new ExpressAdapter();
@@ -139,7 +151,7 @@ async function start() {
 
     createBullBoard({
       queues: [new BullMQAdapter(queue)],
-      serverAdapter
+      serverAdapter,
     });
 
     const bullBoardApp = express();
@@ -165,11 +177,9 @@ async function start() {
 
     const shutdown = async (signal) => {
       logger.info(`Received ${signal}, shutting down gracefully...`);
-
       cleanupService.stop();
       await queueService.close();
       await redisService.disconnect();
-
       process.exit(0);
     };
 
