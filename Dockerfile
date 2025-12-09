@@ -1,17 +1,22 @@
-# Build stage for Node.js app
+# =========================
+#   BUILD NODE MODULES
+# =========================
 FROM node:20-bookworm-slim AS builder
 
 WORKDIR /build
 COPY package*.json ./
 RUN npm install --omit=dev
 
-# Production stage with FreeCAD via conda
+
+# =========================
+#   RUNTIME WITH FREECAD
+# =========================
 FROM mambaorg/micromamba:1.5-bookworm-slim
 
 USER root
 WORKDIR /app
 
-# Install system dependencies
+# --- Install system dependencies ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
@@ -21,38 +26,43 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcursor1 \
     libxft2 \
     libxinerama1 \
-    procps \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js
+# --- Install Node.js (real node, not micromamba node) ---
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install FreeCAD
+# --- Install FreeCAD in base conda environment ---
 RUN micromamba install -y -n base -c conda-forge freecad=0.21.2 \
     && micromamba clean --all --yes
 
-ENV PATH="/opt/conda/bin:$PATH"
+# FreeCAD environment vars
+ENV PATH="/opt/conda/bin:${PATH}"
 ENV QT_QPA_PLATFORM=offscreen
 ENV FREECAD_USER_HOME=/tmp
 
-# Copy app files
+# --- Copy node_modules from builder ---
 COPY --from=builder /build/node_modules ./node_modules
+
+# --- Copy backend ---
 COPY src ./src
-COPY public ./public
 COPY package.json .
+
+# --- Copy frontend ---
+COPY public ./public
 COPY logo.png .
 COPY README.md .
 
-# Create runtime dirs
+# --- Prepare folders ---
 RUN mkdir -p uploads converted logs /tmp/runtime \
     && chmod 777 uploads converted logs \
     && chmod 700 /tmp/runtime
 
-EXPOSE 3000
+EXPOSE 3000 3001
 
-# 🚨 THIS IS 100% CORRECT — DO NOT CHANGE IT
-CMD ["sh", "-c", "micromamba run -n base node src/server.js"]
+# =========================
+#     THE FIX:
+#     RUN NODE DIRECTLY
+# =========================
+CMD ["node", "src/server.js"]
