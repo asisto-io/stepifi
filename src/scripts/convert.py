@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 STL to STEP Converter with Mesh Repair + Planar Face Merging
-Cleans all FreeCAD console output to prevent polluting JSON.
 """
 
 import sys
@@ -9,46 +8,19 @@ import os
 import argparse
 import json
 
-# --- PATCH FREECAD CONSOLE NOISE ---
-class QuietConsole:
-    def __init__(self):
-        self.buffer = ""
-
-    def write(self, msg):
-        # Send ALL garbage output to stderr, not stdout
-        sys.stderr.write(msg)
-
-    def flush(self):
-        pass
-
-# Redirect FreeCAD console BEFORE importing it
-sys.stderr.write("Initializing FreeCAD…\n")
-sys.stdout = QuietConsole()   # BLOCK ALL STDOUT NOISE
-# ------------------------------------------------------------------------------
-
 try:
     import FreeCAD
     import Part
     import Mesh
     import MeshPart
     import Import
-except Exception as e:
+except ImportError as e:
     print(json.dumps({
         "success": False,
         "error": f"FreeCAD import failed: {str(e)}",
         "stage": "import"
     }))
     sys.exit(1)
-
-# Restore stdout ONLY for final JSON output
-real_stdout = sys.__stdout__
-
-# ------------------------------------------------------------------------------
-
-def safe_print_json(data):
-    """Ensure ONLY JSON prints to stdout."""
-    real_stdout.write(json.dumps(data, indent=2) + "\n")
-    real_stdout.flush()
 
 
 def get_mesh_info(mesh):
@@ -142,9 +114,17 @@ def convert_stl_to_step(input_path, output_path, tolerance=0.01, repair=True, in
 
         doc = FreeCAD.newDocument("STLtoSTEP")
 
-        shape = Part.Shape()
-        shape.makeShapeFromMesh(mesh.Topology, tolerance)
+        # ------------------------------
+        # ⭐ FIX: Use MeshPart.meshToShape()
+        # ------------------------------
+        try:
+            shape = MeshPart.meshToShape(mesh, tolerance)
+        except Exception as e:
+            result["error"] = f"meshToShape failed: {str(e)}"
+            result["stage"] = "meshToShape"
+            return result
 
+        # Try solid
         try:
             solid = Part.makeSolid(shape)
             final_shape = solid
@@ -182,7 +162,7 @@ def convert_stl_to_step(input_path, output_path, tolerance=0.01, repair=True, in
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Convert STL → STEP safely")
+    parser = argparse.ArgumentParser(description="Convert STL → STEP with mesh repair + planar merging")
     parser.add_argument("input")
     parser.add_argument("output")
     parser.add_argument("--tolerance", type=float, default=0.01)
@@ -192,13 +172,14 @@ def main():
     args = parser.parse_args()
 
     result = convert_stl_to_step(
-        args.input, args.output,
+        args.input,
+        args.output,
         tolerance=args.tolerance,
         repair=args.repair,
         info_only=args.info
     )
 
-    safe_print_json(result)
+    print(json.dumps(result, indent=2))
     sys.exit(0 if result["success"] else 1)
 
 
