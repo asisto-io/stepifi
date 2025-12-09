@@ -50,8 +50,8 @@ class ConverterService {
       
       logger.debug('Running FreeCAD conversion', { args });
       
-      // Use freecadcmd for headless operation
-      const process = spawn('FreeCADCmd', args, {
+      // Use freecad for headless operation
+      const process = spawn('freecad', args, {
         timeout: config.conversion.timeout,
         env: {
           ...process.env,
@@ -112,7 +112,7 @@ class ConverterService {
         
         let errorMessage = err.message;
         if (err.code === 'ENOENT') {
-          errorMessage = 'FreeCAD (freecadcmd) not found. Please install FreeCAD.';
+          errorMessage = 'FreeCAD (freecad) not found. Please install FreeCAD.';
         }
         
         resolve({
@@ -135,7 +135,7 @@ class ConverterService {
         '--info',
       ];
       
-      const process = spawn('FreeCADCmd', args, {
+      const process = spawn('freecad', args, {
         timeout: 30000, // 30 second timeout for info
         env: {
           ...process.env,
@@ -173,7 +173,7 @@ class ConverterService {
    */
   async checkFreecad() {
     return new Promise((resolve) => {
-      const process = spawn('freecadcmd', ['--version'], {
+      const process = spawn('freecad', ['--version'], {
         timeout: 10000,
       });
       
