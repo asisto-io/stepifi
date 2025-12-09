@@ -19,52 +19,16 @@ const conversionRoutes = require('./routes/conversion.routes');
 const app = express();
 
 /* ---------------------------------------------------
-   🔥 FIXED CSP — Helmet defaults DISABLED
+   🚨 DISABLE ALL CSP COMPLETELY
 ---------------------------------------------------- */
 app.use(
   helmet({
-    contentSecurityPolicy: {
-      useDefaults: false,   // TURN OFF Helmet's injected defaults
-      directives: {
-        defaultSrc: ["'self'"],
-
-        scriptSrc: [
-          "'self'",
-          "'unsafe-inline'",
-          "https://cdnjs.cloudflare.com",
-          "https://cdn.jsdelivr.net",
-          "https://cdn.jsdelivr.net/npm",
-        ],
-
-        styleSrc: [
-          "'self'",
-          "'unsafe-inline'",
-          "https://cdnjs.cloudflare.com",
-          "https://fonts.googleapis.com"
-        ],
-
-        fontSrc: [
-          "'self'",
-          "https://fonts.gstatic.com",
-          "https://cdnjs.cloudflare.com"
-        ],
-
-        imgSrc: ["'self'", "blob:", "data:"],
-
-        connectSrc: ["'self'"],
-
-        workerSrc: ["'self'", "blob:"],
-
-        objectSrc: ["'none'"],
-        frameSrc: ["'self'"],
-      },
-    }
+    contentSecurityPolicy: false
   })
 );
 
-/* ---------------------------------------------------
-   CORE APP
----------------------------------------------------- */
+/* --------------------------------------------------- */
+
 app.use(cors());
 app.use(express.json());
 
@@ -72,24 +36,24 @@ app.use(express.json());
 const limiter = rateLimit({
   windowMs: config.rateLimit.windowMs,
   max: config.rateLimit.max,
-  message: { success: false, error: 'Too many requests, please try again later' },
+  message: { success: false, error: 'Too many requests, try later' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
 app.use('/api/', limiter);
 
-// Static files
+// Static folder
 app.use(express.static(path.join(__dirname, '../public')));
 
 // API routes
 app.use('/api', conversionRoutes);
 
-// Health endpoint
+// HealthCheck
 app.get('/health', async (req, res) => {
   const redisHealthy = await redisService.healthCheck();
   const freecadCheck = await converterService.checkFreecad();
-  
+
   const healthy = redisHealthy && freecadCheck.available;
 
   res.status(healthy ? 200 : 503).json({
@@ -98,17 +62,12 @@ app.get('/health', async (req, res) => {
     services: {
       redis: redisHealthy ? 'connected' : 'disconnected',
       freecad: freecadCheck.available ? 'available' : 'not found',
-      freecadVersion: freecadCheck.version || null
-    },
-    config: {
-      maxFileSize: `${Math.round(config.upload.maxFileSize / 1024 / 1024)}MB`,
-      jobTTL: `${config.jobs.ttlHours} hours`,
-      defaultTolerance: config.conversion.defaultTolerance
+      freecadVersion: freecadCheck.version || null,
     }
   });
 });
 
-// Stats endpoint
+// Stats
 app.get('/api/stats', async (req, res) => {
   try {
     const cleanupStats = await cleanupService.getStats();
@@ -119,7 +78,7 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
-// SPA routing
+// SPA support
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
@@ -130,8 +89,9 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, error: 'Internal server error' });
 });
 
+
 /* ---------------------------------------------------
-   SERVER STARTUP
+   START SERVER
 ---------------------------------------------------- */
 async function start() {
   try {
@@ -145,7 +105,7 @@ async function start() {
 
     createBullBoard({
       queues: [new BullMQAdapter(queue)],
-      serverAdapter
+      serverAdapter,
     });
 
     const bullBoardApp = express();
@@ -153,21 +113,19 @@ async function start() {
 
     cleanupService.start();
 
-    const freecadCheck = await converterService.checkFreecad();
-    if (!freecadCheck.available) {
-      logger.warn('FreeCAD (freecadcmd) not found!');
-    }
+    const fc = await converterService.checkFreecad();
+    if (!fc.available) logger.warn('FreeCAD missing');
 
     app.listen(config.port, () => {
       logger.info(`Server running on port ${config.port}`);
     });
 
     bullBoardApp.listen(config.bullBoardPort, () => {
-      logger.info(`Bull Board on port ${config.bullBoardPort}/admin/queues`);
+      logger.info(`Bull Board running on port ${config.bullBoardPort}`);
     });
 
     const shutdown = async (sig) => {
-      logger.info(`Received ${sig}, shutting down...`);
+      logger.info(`Shutting down (${sig})`);
       cleanupService.stop();
       await queueService.close();
       await redisService.disconnect();
@@ -178,7 +136,7 @@ async function start() {
     process.on('SIGINT', () => shutdown('SIGINT'));
 
   } catch (err) {
-    logger.error('Startup failure:', err);
+    logger.error('Startup error:', err);
     process.exit(1);
   }
 }
