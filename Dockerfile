@@ -3,7 +3,7 @@ FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm install --omit=dev
 
 # Production stage with FreeCAD
 FROM debian:bookworm-slim
