@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="Stepifi Logo" width="900">
+  <img src="public/logo.png" alt="Stepifi Logo" width="900">
 </p>
 
 A self-hosted web application that converts STL mesh files to STEP (ISO 10303) solid format. Built for makers, engineers, and 3D printing enthusiasts who need to work with CAD software that requires STEP files.
@@ -30,12 +30,14 @@ This tool converts STL meshes to STEP format, but **it does not reverse-engineer
 ## Features
 
 - 🖱️ **Drag & Drop Interface** — Upload files with a simple drag-and-drop or file picker
-- 👁️ **3D Preview** — Inspect your STL in-browser with Three.js before converting
+- 👁️ **Real-Time 3D Preview** — Inspect your STL in-browser with Three.js before converting
 - 🔧 **Automatic Mesh Repair** — Fixes non-manifold edges, holes, duplicate vertices, and inconsistent normals
 - ⚙️ **Adjustable Tolerance** — Control the precision of edge merging (trade accuracy for speed)
 - 📦 **Batch Processing** — Upload and convert multiple files at once
+- ❌ **Job Cancellation** — Cancel queued or in-progress conversions
 - 📊 **Job Queue Dashboard** — Monitor conversion progress with Bull Board
 - 🧹 **Auto Cleanup** — Files automatically expire and are deleted after 24 hours (configurable)
+- 💓 **Health Monitoring** — Built-in system health checks
 - 🔒 **Self-Hosted** — Your files never leave your network
 - 🐳 **Docker Ready** — One-command deployment
 
@@ -49,7 +51,6 @@ This tool converts STL meshes to STEP format, but **it does not reverse-engineer
 - [Docker Compose](https://docs.docker.com/compose/install/) installed
 
 ### Installation
-
 ```bash
 # Clone the repository
 git clone https://github.com/voron69-bit/Stepifi.git
@@ -57,9 +58,18 @@ cd Stepifi
 
 # Start the application
 docker-compose up -d
+
+# Check logs to verify startup
+docker-compose logs -f
 ```
 
-That's it. Open your browser to `http://localhost:3000`
+Wait until you see:
+```
+Redis connected
+Server running on port 3000
+```
+
+Then open your browser to `http://localhost:3000`
 
 ---
 
@@ -78,7 +88,7 @@ The Docker setup consists of two containers managed by Docker Compose:
 |-----------|---------|
 | Debian Bookworm | Base operating system |
 | Node.js 20 | Application runtime |
-| FreeCAD (headless) | STL → STEP conversion engine |
+| FreeCAD 0.21.2 (headless) | STL → STEP conversion engine |
 | Python 3 + NumPy | Mesh processing operations |
 | Express.js | Web server and API |
 | BullMQ | Job queue management |
@@ -115,6 +125,8 @@ Multiple files can be uploaded for batch processing.
 
 ### Step 3: Configure Conversion Settings (Optional)
 
+Hover over the info icons (ⓘ) for detailed explanations.
+
 | Setting | Description | Default |
 |---------|-------------|---------|
 | **Tolerance** | Edge merging precision. Lower = more accurate but slower. Higher = faster but less precise. | `0.01` |
@@ -122,20 +134,27 @@ Multiple files can be uploaded for batch processing.
 
 ### Step 4: Preview Your Model
 
-Once uploaded, a 3D preview appears showing:
-- Interactive view (drag to rotate, scroll to zoom)
+A 3D preview appears immediately showing:
+- Interactive view (drag to rotate, scroll to zoom, right-click to pan)
 - Vertex count
 - Face count  
 - File size
 
-Use the toolbar buttons to reset the view or toggle wireframe mode.
+Use the toolbar buttons to:
+- 🔄 Reset camera view
+- ⊞ Toggle wireframe mode
 
 ### Step 5: Monitor Conversion Progress
 
 Each uploaded file creates a job card showing:
 - **Status**: Queued → Processing → Completed (or Failed)
 - **Progress bar**: Visual progress indicator
-- **Time remaining**: Countdown until auto-deletion
+- **Time remaining**: Countdown until auto-deletion (24 hours default)
+
+**Job Controls:**
+- **Cancel** — Stop queued or processing jobs
+- **Download** — Get your STEP file when complete
+- **Delete** — Remove job and files
 
 ### Step 6: Download Your STEP File
 
@@ -147,6 +166,29 @@ The file will download with the same name as your original STL, but with a `.ste
 
 ## Monitoring and Administration
 
+### Health Check
+
+Click the **heartbeat icon** (💓) in the top-right header to verify system status:
+- Overall system health
+- Redis connection status
+- FreeCAD availability
+- FreeCAD version information
+
+Or via API:
+```bash
+curl http://localhost:3000/health
+```
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "redis": true,
+  "freecad": true,
+  "freecadVersion": "FreeCAD 0.21.2, Libs: 0.21.2..."
+}
+```
+
 ### Job Queue Dashboard
 
 Access detailed job information at `http://localhost:3001/admin/queues`
@@ -156,18 +198,7 @@ This shows:
 - Failed jobs with error details
 - Job processing times
 - Queue health metrics
-
-### Health Check
-
-Click the **heartbeat icon** (💓) in the header to verify system status:
-- Redis connection
-- FreeCAD availability
-- Current configuration
-
-Or via API:
-```bash
-curl http://localhost:3000/health
-```
+- Retry information
 
 ---
 
@@ -201,17 +232,137 @@ Then restart:
 docker-compose down && docker-compose up -d
 ```
 
+### Example: Custom Port Mapping
+
+In `docker-compose.yml`:
+```yaml
+ports:
+  - "8080:3000"  # Access at http://localhost:8080
+  - "8081:3001"  # Dashboard at http://localhost:8081
+```
+
 ---
 
-## Manual Installation (Without Docker)
+## API Reference
 
-### Prerequisites
+### Convert a File
+```bash
+curl -X POST http://localhost:3000/api/convert \
+  -F "stlFile=@model.stl" \
+  -F "tolerance=0.01" \
+  -F "repair=true"
+```
 
+**Response:**
+```json
+{
+  "success": true,
+  "jobId": "e96d23f0-cdf5-42f3-b787-aaa70bb55ed2",
+  "message": "Conversion job queued",
+  "expiresAt": "2024-12-10T15:30:00.000Z"
+}
+```
+
+### Check Job Status
+```bash
+curl http://localhost:3000/api/job/{jobId}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "job": {
+    "id": "e96d23f0-cdf5-42f3-b787-aaa70bb55ed2",
+    "status": "completed",
+    "progress": 100,
+    "message": "Conversion complete",
+    "result": {
+      "outputPath": "/app/converted/e96d23f0-cdf5-42f3-b787-aaa70bb55ed2.step",
+      "facets": 19568,
+      "outputSize": 14308580
+    },
+    "expiresIn": 86340
+  }
+}
+```
+
+### Download Converted File
+```bash
+curl -O http://localhost:3000/api/download/{jobId}
+```
+
+### Cancel/Delete a Job
+```bash
+curl -X DELETE http://localhost:3000/api/job/{jobId}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Job deleted successfully"
+}
+```
+
+---
+
+## Troubleshooting
+
+### Container won't start
+```bash
+# Check logs for errors
+docker-compose logs app
+docker-compose logs redis
+
+# Rebuild containers
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+```
+
+### "FreeCAD not found" error
+FreeCAD is baked into the Docker image. If you see this error:
+```bash
+docker-compose build --no-cache
+docker-compose up -d
+```
+
+### Conversion fails or times out
+- **Use a higher tolerance** value (e.g., `0.05` or `0.1`)
+- **Simplify the mesh** in MeshLab or Blender before uploading
+- **Increase Docker memory** allocation in Docker Desktop settings
+- Check `docker-compose logs app` for specific Python errors
+
+### Files disappearing
+Files auto-delete after `JOB_TTL_HOURS` (default 24 hours). Download promptly or increase the TTL in `docker-compose.yml`.
+
+### "429 Too Many Requests" error
+The API has rate limiting enabled (20 requests per 15 minutes by default). Wait or increase `RATE_LIMIT_MAX` in environment variables.
+
+### 3D preview not loading
+- Hard refresh your browser (Ctrl+F5 or Cmd+Shift+R)
+- Check browser console (F12) for JavaScript errors
+- Ensure you're using a modern browser (Chrome, Firefox, Edge, Safari)
+
+### Health check shows Redis disconnected
+```bash
+docker-compose restart redis
+docker-compose restart app
+```
+
+---
+
+## Development
+
+### Local Development Without Docker
+
+**Prerequisites:**
 - Node.js 18+
 - Redis server
 - FreeCAD with CLI (`freecadcmd`)
 
-### Install FreeCAD
+**Install FreeCAD:**
 
 **Ubuntu/Debian:**
 ```bash
@@ -225,8 +376,7 @@ brew install freecad
 
 **Windows:** Download from [freecadweb.org](https://www.freecadweb.org/downloads.php)
 
-### Run the Application
-
+**Run the Application:**
 ```bash
 # Install dependencies
 npm install
@@ -234,102 +384,130 @@ npm install
 # Start Redis (separate terminal)
 redis-server
 
-# Start the app
-npm start
-
-# Or for development with auto-reload
+# Start the app in development mode
 npm run dev
 ```
 
----
-
-## API Reference
-
-### Convert a File
-
-```bash
-curl -X POST http://localhost:3000/api/convert \
-  -F "stlFile=@model.stl" \
-  -F "tolerance=0.01" \
-  -F "repair=true"
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "jobId": "uuid-here",
-  "message": "Conversion job queued"
-}
-```
-
-### Check Job Status
-
-```bash
-curl http://localhost:3000/api/job/{jobId}
-```
-
-### Download Converted File
-
-```bash
-curl -O http://localhost:3000/api/download/{jobId}
-```
-
-### Delete a Job
-
-```bash
-curl -X DELETE http://localhost:3000/api/job/{jobId}
-```
-
----
-
-## Troubleshooting
-
-### Container won't start
-```bash
-docker-compose logs app
-docker-compose logs redis
-```
-
-### "FreeCAD not found" error
-```bash
-docker-compose build --no-cache
-docker-compose up -d
-```
-
-### Conversion times out
-- Use a higher tolerance value (e.g., `0.05`)
-- Simplify the mesh in MeshLab before uploading
-- Increase Docker memory allocation
-
-### Files disappearing
-Files auto-delete after `JOB_TTL_HOURS` (default 24 hours). Download promptly or increase the TTL.
-
----
-
-## Project Structure
-
+### Project Structure
 ```
 Stepifi/
 ├── docker-compose.yml       # Container orchestration
 ├── Dockerfile               # App container build
-├── package.json             # Dependencies
+├── package.json             # Node.js dependencies
 ├── src/
 │   ├── server.js            # Express entry point
-│   ├── config/              # Configuration
-│   ├── routes/              # API endpoints
-│   ├── services/            # Business logic
+│   ├── config/              
+│   │   └── config.js        # Environment configuration
+│   ├── routes/              
+│   │   ├── api.routes.js    # API endpoints
+│   │   └── health.routes.js # Health check
+│   ├── services/            
 │   │   ├── converter.service.js   # FreeCAD integration
-│   │   ├── queue.service.js       # Job queue
-│   │   ├── cleanup.service.js     # Auto-cleanup
-│   │   └── ...
+│   │   ├── queue.service.js       # BullMQ job queue
+│   │   ├── cleanup.service.js     # Auto-cleanup cron
+│   │   └── storage.service.js     # File management
+│   ├── middleware/          
+│   │   ├── upload.middleware.js   # Multer file upload
+│   │   └── rateLimiter.middleware.js  # Rate limiting
 │   └── scripts/
-│       └── convert.py       # FreeCAD Python script
+│       └── convert.py       # FreeCAD Python conversion script
 └── public/
-    ├── index.html           # Web UI
-    ├── css/style.css        # Styles
-    └── js/app.js            # Frontend + Three.js
+    ├── index.html           # Main web UI
+    ├── logo.png             # Application logo
+    ├── css/
+    │   └── style.css        # Styles
+    └── js/
+        └── app.js           # Frontend JavaScript + Three.js
 ```
+
+### Making Changes
+
+The Docker setup includes volume mounts for live development:
+```yaml
+volumes:
+  - ./src:/app/src              # Live source code updates
+  - ./public:/app/public        # Live frontend updates
+```
+
+Changes to JavaScript, HTML, or CSS are reflected immediately. Just refresh your browser.
+
+For changes to `package.json`, `Dockerfile`, or `docker-compose.yml`:
+```bash
+docker-compose down
+docker-compose build
+docker-compose up -d
+```
+
+---
+
+## Security Considerations
+
+- **Rate Limiting**: Enabled by default (20 requests per 15 minutes)
+- **File Size Limits**: 100MB by default (configurable)
+- **Auto-Cleanup**: Files expire after 24 hours
+- **No Authentication**: This tool has no built-in authentication. If exposing to the internet, use a reverse proxy with authentication (nginx, Caddy, Traefik)
+- **CORS**: Disabled by default. Enable only if needed for external integrations.
+
+### Recommended Production Setup
+```bash
+# Use behind a reverse proxy with HTTPS
+# Example nginx config:
+
+server {
+    listen 443 ssl;
+    server_name stepifi.yourdomain.com;
+    
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+    
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+---
+
+## Performance Tips
+
+### For Large Files
+- Increase tolerance to `0.05` or `0.1`
+- Disable mesh repair if the file is already clean
+- Increase Docker memory allocation
+
+### For Batch Processing
+- Increase `MAX_CONCURRENT_JOBS` in environment variables
+- Monitor system resources to avoid overload
+- Consider adding more Redis workers
+
+### Cleanup Optimization
+- Default cleanup runs every 15 minutes
+- Adjust `CLEANUP_CRON` if you need more frequent cleanup
+- Monitor disk usage in the `uploads` and `converted` directories
+
+---
+
+## Known Limitations
+
+- **No parametric data recovery**: Output is a solid body, not editable features
+- **Faceted curves**: Cylinders and curved surfaces remain as triangle meshes
+- **File size**: Very large files (>1GB) may cause memory issues
+- **Processing time**: Complex models can take several minutes
+- **Mesh quality**: Output quality depends heavily on input STL quality
+
+---
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ---
 
@@ -337,11 +515,25 @@ Stepifi/
 
 MIT License — free for personal and commercial use.
 
+See [LICENSE](LICENSE) file for details.
+
 ---
 
 ## Acknowledgments
 
-- [FreeCAD](https://www.freecadweb.org/) — Open-source CAD
-- [Three.js](https://threejs.org/) — 3D visualization
-- [BullMQ](https://docs.bullmq.io/) — Job queue
+- [FreeCAD](https://www.freecadweb.org/) — Open-source CAD platform
+- [Three.js](https://threejs.org/) — WebGL 3D visualization
+- [BullMQ](https://docs.bullmq.io/) — Redis-based job queue
+- [Express.js](https://expressjs.com/) — Web framework
 - Inspired by [Jaydenha09/STL-to-STEP-web-converter](https://github.com/Jaydenha09/STL-to-STEP-web-converter)
+
+---
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/voron69-bit/Stepifi/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/voron69-bit/Stepifi/discussions)
+
+---
+
+**Made with ❤️ for the maker community**
