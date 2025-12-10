@@ -499,7 +499,7 @@ Contributions are welcome! Please:
 
 ## License
 
-MIT License — free for personal and commercial use.
+Non-Commercial License — Free for personal, educational, and non-commercial use only
 
 See [LICENSE](LICENSE) file for details.
 
