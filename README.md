@@ -98,7 +98,6 @@ The Docker setup consists of two containers managed by Docker Compose:
 | Port | Service | URL |
 |------|---------|-----|
 | `3169` | Main web interface | `http://localhost:3169` |
-| `3001` | Job queue dashboard | `http://localhost:3001/admin/queues` |
 
 ### Persistent Volumes
 
@@ -188,19 +187,6 @@ curl http://localhost:3169/health
   "freecadVersion": "FreeCAD 0.21.2, Libs: 0.21.2..."
 }
 ```
-
-### Job Queue Dashboard
-
-Access detailed job information at `http://localhost:3001/admin/queues`
-
-This shows:
-- Active, waiting, and completed jobs
-- Failed jobs with error details
-- Job processing times
-- Queue health metrics
-- Retry information
-
----
 
 ## Configuration
 
