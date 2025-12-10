@@ -66,7 +66,7 @@ docker-compose logs -f
 Wait until you see:
 ```
 Redis connected
-Server running on port 3000
+Server running on port 3169
 ```
 
 Then open your browser to `http://localhost:3169`
@@ -97,7 +97,7 @@ The Docker setup consists of two containers managed by Docker Compose:
 
 | Port | Service | URL |
 |------|---------|-----|
-| `3000` | Main web interface | `http://localhost:3169` |
+| `3169` | Main web interface | `http://localhost:3169` |
 | `3001` | Job queue dashboard | `http://localhost:3001/admin/queues` |
 
 ### Persistent Volumes
@@ -210,7 +210,7 @@ Create a `.env` file or modify `docker-compose.yml`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `3000` | Web interface port |
+| `PORT` | `3169` | Web interface port |
 | `BULL_BOARD_PORT` | `3001` | Queue dashboard port |
 | `MAX_FILE_SIZE` | `104857600` | Max upload size in bytes (100MB) |
 | `JOB_TTL_HOURS` | `24` | Hours before files auto-delete |
@@ -237,7 +237,7 @@ docker-compose down && docker-compose up -d
 In `docker-compose.yml`:
 ```yaml
 ports:
-  - "8080:3000"  # Access at http://localhost:8080
+  - "8080:3169"  # Access at http://localhost:8080
   - "8081:3001"  # Dashboard at http://localhost:8081
 ```
 
