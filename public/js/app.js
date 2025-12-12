@@ -11,14 +11,64 @@ class STLConverter {
     this.controls = null;
     this.mesh = null;
     this.wireframeMode = false;
-    
+    this.db = null;
+
     this.init();
   }
 
-  init() {
+  async init() {
     this.bindElements();
     this.bindEvents();
     this.initThreeJS();
+    await this.initIndexedDB();
+    await this.loadJobsFromStorage();
+    this.cleanupExpiredJobs();
+    // Note: resumePollingJobs is now called inside loadJobsFromStorage
+    
+    // Periodically sync jobs from server (every 10 seconds)
+    setInterval(() => this.syncJobsFromServer(), 10000);
+  }
+
+  async syncJobsFromServer() {
+    try {
+      const response = await fetch('/api/jobs');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.jobs) {
+          // Update jobs map with server data
+          const serverJobIds = new Set(data.jobs.map(j => j.id));
+          
+          // Remove jobs that no longer exist on server
+          for (const [jobId] of this.jobs) {
+            if (!serverJobIds.has(jobId)) {
+              this.jobs.delete(jobId);
+              this.deleteSTLFromIndexedDB(jobId);
+            }
+          }
+          
+          // Add/update jobs from server
+          for (const job of data.jobs) {
+            const existingJob = this.jobs.get(job.id);
+            
+            // Preserve hasPreview from existing job, or check IndexedDB for new jobs
+            if (existingJob && existingJob.hasPreview !== undefined) {
+              job.hasPreview = existingJob.hasPreview;
+            } else {
+              // Check if we have preview data in IndexedDB
+              const hasData = await this.hasSTLInIndexedDB(job.id);
+              job.hasPreview = hasData;
+            }
+            
+            this.jobs.set(job.id, job);
+          }
+          
+          this.saveJobsToStorage();
+          this.renderJobs();
+        }
+      }
+    } catch (err) {
+      console.error('Failed to sync jobs from server:', err);
+    }
   }
 
   bindElements() {
@@ -74,6 +124,196 @@ class STLConverter {
     window.addEventListener('resize', () => this.handleResize());
   }
 
+  // IndexedDB for storing STL/3MF files
+  async initIndexedDB() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open('StepifiDB', 1);
+
+      request.onerror = () => {
+        console.error('IndexedDB failed to open');
+        resolve(); // Continue without DB
+      };
+
+      request.onsuccess = (event) => {
+        this.db = event.target.result;
+        resolve();
+      };
+
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains('stlFiles')) {
+          db.createObjectStore('stlFiles', { keyPath: 'jobId' });
+        }
+      };
+    });
+  }
+
+  async saveSTLToIndexedDB(jobId, arrayBuffer, filename) {
+    if (!this.db) return;
+
+    // Only store files under 20MB to avoid filling storage
+    if (arrayBuffer.byteLength > 20 * 1024 * 1024) {
+      console.log('File too large to store for preview');
+      return;
+    }
+
+    try {
+      const transaction = this.db.transaction(['stlFiles'], 'readwrite');
+      const store = transaction.objectStore('stlFiles');
+      await store.put({
+        jobId: jobId,
+        data: arrayBuffer,
+        filename: filename,
+        timestamp: Date.now()
+      });
+    } catch (err) {
+      console.error('Failed to save file to IndexedDB:', err);
+    }
+  }
+
+  async loadSTLFromIndexedDB(jobId) {
+    if (!this.db) return null;
+
+    try {
+      const transaction = this.db.transaction(['stlFiles'], 'readonly');
+      const store = transaction.objectStore('stlFiles');
+      const request = store.get(jobId);
+
+      return new Promise((resolve, reject) => {
+        request.onsuccess = () => {
+          resolve(request.result);
+        };
+        request.onerror = () => {
+          resolve(null);
+        };
+      });
+    } catch (err) {
+      console.error('Failed to load file from IndexedDB:', err);
+      return null;
+    }
+  }
+
+  async deleteSTLFromIndexedDB(jobId) {
+    if (!this.db) return;
+
+    try {
+      const transaction = this.db.transaction(['stlFiles'], 'readwrite');
+      const store = transaction.objectStore('stlFiles');
+      await store.delete(jobId);
+    } catch (err) {
+      console.error('Failed to delete file from IndexedDB:', err);
+    }
+  }
+
+  async hasSTLInIndexedDB(jobId) {
+    if (!this.db) return false;
+
+    try {
+      const transaction = this.db.transaction(['stlFiles'], 'readonly');
+      const store = transaction.objectStore('stlFiles');
+      const request = store.get(jobId);
+
+      return new Promise((resolve) => {
+        request.onsuccess = () => {
+          resolve(request.result !== undefined);
+        };
+        request.onerror = () => {
+          resolve(false);
+        };
+      });
+    } catch (err) {
+      console.error('Failed to check IndexedDB:', err);
+      return false;
+    }
+  }
+
+  // LocalStorage persistence
+  async loadJobsFromStorage() {
+    try {
+      // First, load from localStorage as cache
+      const stored = localStorage.getItem('stepifi_jobs');
+      if (stored) {
+        const jobsArray = JSON.parse(stored);
+        jobsArray.forEach(job => {
+          this.jobs.set(job.id, job);
+        });
+      }
+
+      // Then fetch all jobs from server (authoritative source)
+      try {
+        const response = await fetch('/api/jobs');
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.jobs) {
+            // Clear and reload with server jobs
+            this.jobs.clear();
+            
+            // Add jobs and check for preview availability
+            for (const job of data.jobs) {
+              // Check if we have preview data in IndexedDB
+              const hasData = await this.hasSTLInIndexedDB(job.id);
+              job.hasPreview = hasData;
+              this.jobs.set(job.id, job);
+            }
+            
+            // Save to localStorage
+            this.saveJobsToStorage();
+            
+            // Resume polling for incomplete jobs
+            this.resumePollingJobs();
+          }
+        }
+      } catch (fetchErr) {
+        console.error('Failed to fetch jobs from server:', fetchErr);
+        // Continue with localStorage jobs if server fetch fails
+      }
+
+      this.renderJobs();
+    } catch (err) {
+      console.error('Failed to load jobs:', err);
+    }
+  }
+
+  saveJobsToStorage() {
+    try {
+      const jobsArray = Array.from(this.jobs.values());
+      localStorage.setItem('stepifi_jobs', JSON.stringify(jobsArray));
+    } catch (err) {
+      console.error('Failed to save jobs to storage:', err);
+    }
+  }
+
+  cleanupExpiredJobs() {
+    const now = Date.now();
+    let removed = 0;
+    
+    this.jobs.forEach((job, jobId) => {
+      if (job.expiresAt) {
+        const expiresAt = new Date(job.expiresAt).getTime();
+        if (now > expiresAt) {
+          this.jobs.delete(jobId);
+          this.deleteSTLFromIndexedDB(jobId);
+          removed++;
+        }
+      }
+    });
+    
+    if (removed > 0) {
+      this.saveJobsToStorage();
+      this.renderJobs();
+      console.log(`Cleaned up ${removed} expired jobs`);
+    }
+  }
+
+  resumePollingJobs() {
+    // Resume polling for any incomplete jobs
+    this.jobs.forEach((job, jobId) => {
+      if (job.status === 'queued' || job.status === 'processing') {
+        this.startPollingJob(jobId);
+      }
+    });
+  }
+
   // File handling
   handleDragOver(e) {
     e.preventDefault();
@@ -91,16 +331,17 @@ class STLConverter {
     e.preventDefault();
     e.stopPropagation();
     this.dropZone.classList.remove('drag-over');
-    
-    const files = Array.from(e.dataTransfer.files).filter(f => 
-      f.name.toLowerCase().endsWith('.stl')
-    );
-    
+
+    const files = Array.from(e.dataTransfer.files).filter(f => {
+      const name = f.name.toLowerCase();
+      return name.endsWith('.stl') || name.endsWith('.3mf');
+    });
+
     if (files.length === 0) {
-      this.showToast('Please drop STL files only', 'error');
+      this.showToast('Please drop STL or 3MF files only', 'error');
       return;
     }
-    
+
     this.processFiles(files);
   }
 
@@ -113,10 +354,6 @@ class STLConverter {
   }
 
   async processFiles(files) {
-    // Clear previous jobs
-    this.jobs.clear();
-    this.renderJobs();
-    
     // Preview the first file immediately
     if (files.length > 0) {
       this.previewSTL(files[0]);
@@ -130,9 +367,14 @@ class STLConverter {
 
   async uploadFile(file) {
     const formData = new FormData();
-    formData.append('stlFile', file);
+    formData.append('meshFile', file);  // Changed from 'stlFile' to match backend
     formData.append('tolerance', this.toleranceInput.value);
     formData.append('repair', this.repairMeshCheckbox.checked);
+
+    // Warn for large files
+    if (file.size > 5 * 1024 * 1024) {
+      this.showToast('Large file detected - conversion may take 15-30 minutes', 'warning');
+    }
 
     try {
       const response = await fetch('/api/convert', {
@@ -144,12 +386,23 @@ class STLConverter {
 
       if (data.success) {
         this.showToast(`Conversion started: ${file.name}`, 'success');
+        
+        // Store file for preview
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          await this.saveSTLToIndexedDB(data.jobId, e.target.result, file.name);
+        };
+        reader.readAsArrayBuffer(file);
+
         this.addJob({
           id: data.jobId,
           filename: file.name,
+          originalFilename: file.name,  // Also set originalFilename for consistency with server
           status: 'queued',
           progress: 0,
           expiresAt: data.expiresAt,
+          fileSize: file.size,
+          hasPreview: file.size <= 20 * 1024 * 1024, // Flag if preview available
         });
         this.startPollingJob(data.jobId);
       } else {
@@ -163,6 +416,7 @@ class STLConverter {
   // Job management
   addJob(job) {
     this.jobs.set(job.id, job);
+    this.saveJobsToStorage();
     this.renderJobs();
   }
 
@@ -170,34 +424,62 @@ class STLConverter {
     const job = this.jobs.get(jobId);
     if (job) {
       Object.assign(job, updates);
+      this.saveJobsToStorage();
       this.renderJobs();
     }
   }
 
   removeJob(jobId) {
     this.jobs.delete(jobId);
+    this.deleteSTLFromIndexedDB(jobId);
+    this.saveJobsToStorage();
     this.renderJobs();
   }
 
   async startPollingJob(jobId) {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+
+    let pollCount = 0;
+    const maxPolls = 1000; // 50 minutes at 3 second intervals
+
     const poll = async () => {
+      pollCount++;
+
+      // Check if we should stop polling
+      if (pollCount > maxPolls) {
+        this.updateJob(jobId, { 
+          status: 'timeout', 
+          error: 'Polling timeout - please refresh to check status',
+          message: 'Polling timed out. Click refresh to check current status.'
+        });
+        return;
+      }
+
       try {
         const response = await fetch(`/api/job/${jobId}`);
         const data = await response.json();
 
         if (data.success) {
           const job = data.job;
+          
+          // Add estimate for large files
+          let message = job.message;
+          if (job.status === 'processing' && this.jobs.get(jobId)?.fileSize > 5 * 1024 * 1024) {
+            message = `Processing large file (may take 15-30 min)... ${message || ''}`;
+          }
+
           this.updateJob(jobId, {
             status: job.status,
             progress: job.progress,
-            message: job.message,
+            message: message,
             result: job.result,
             error: job.error,
             expiresIn: job.expiresIn,
           });
 
           if (job.status === 'completed') {
-            this.showToast('Conversion completed!', 'success');
+            this.showToast(`Conversion completed: ${this.jobs.get(jobId)?.filename}`, 'success');
             return;
           }
 
@@ -206,13 +488,25 @@ class STLConverter {
             return;
           }
 
-          // Continue polling
-          setTimeout(poll, 3000);
+          // Continue polling - increase interval for long-running jobs
+          const pollInterval = pollCount > 20 ? 5000 : 3000; // 5s after 1 minute
+          setTimeout(poll, pollInterval);
         } else {
-          this.updateJob(jobId, { status: 'failed', error: data.error });
+          // Job not found - might be expired
+          if (response.status === 404) {
+            this.updateJob(jobId, { 
+              status: 'expired', 
+              error: 'Job expired or not found',
+              message: 'Job expired. Please convert again.'
+            });
+          } else {
+            // Retry on error
+            setTimeout(poll, 3000);
+          }
         }
       } catch (err) {
         console.error('Polling error:', err);
+        // Retry on network error
         setTimeout(poll, 3000);
       }
     };
@@ -232,14 +526,15 @@ class STLConverter {
     }
 
     const jobsArray = Array.from(this.jobs.values()).reverse();
-    
+
     this.jobsList.innerHTML = jobsArray.map(job => `
       <div class="job-card" data-job-id="${job.id}">
         <div class="job-header">
           <div class="job-info">
-            <h4>${this.escapeHtml(job.filename)}</h4>
+            <h4>${this.escapeHtml(job.originalFilename || job.filename || 'Unknown file')}</h4>
             <div class="job-meta">
-              <span><i class="fas fa-clock"></i> ${this.formatTimeRemaining(job.expiresIn)}</span>
+              ${job.fileSize ? `<span><i class="fas fa-file"></i> ${this.formatFileSize(job.fileSize)}</span>` : ''}
+              ${job.expiresIn ? `<span><i class="fas fa-clock"></i> ${this.formatTimeRemaining(job.expiresIn)}</span>` : ''}
             </div>
           </div>
           <div class="job-status ${job.status}">
@@ -252,12 +547,20 @@ class STLConverter {
         </div>
         ${job.message ? `<div class="job-message ${job.error ? 'error' : ''}">${this.escapeHtml(job.message)}</div>` : ''}
         <div class="job-actions">
+          ${job.hasPreview ? `
+            <button class="btn btn-ghost btn-sm" onclick="app.previewJob('${job.id}')" title="Preview">
+              <i class="fas fa-eye"></i> Preview
+            </button>
+          ` : ''}
           ${job.status === 'completed' ? `
             <button class="btn btn-success btn-sm" onclick="app.downloadJob('${job.id}')">
               <i class="fas fa-download"></i> Download STEP
             </button>
           ` : ''}
           ${(job.status === 'queued' || job.status === 'processing') ? `
+            <button class="btn btn-primary btn-sm" onclick="app.refreshJob('${job.id}')">
+              <i class="fas fa-sync"></i> Refresh
+            </button>
             <button class="btn btn-danger btn-sm" onclick="app.cancelJob('${job.id}')">
               <i class="fas fa-times"></i> Cancel
             </button>
@@ -268,6 +571,46 @@ class STLConverter {
         </div>
       </div>
     `).join('');
+  }
+
+  async previewJob(jobId) {
+    const stlData = await this.loadSTLFromIndexedDB(jobId);
+    
+    if (!stlData) {
+      this.showToast('Preview not available for this file', 'error');
+      return;
+    }
+
+    this.previewSTL(new File([stlData.data], stlData.filename));
+  }
+
+  async refreshJob(jobId) {
+    try {
+      const response = await fetch(`/api/job/${jobId}`);
+      const data = await response.json();
+
+      if (data.success) {
+        const job = data.job;
+        this.updateJob(jobId, {
+          status: job.status,
+          progress: job.progress,
+          message: job.message,
+          result: job.result,
+          error: job.error,
+          expiresIn: job.expiresIn,
+        });
+        this.showToast('Job status refreshed', 'success');
+
+        // Resume polling if still in progress
+        if (job.status === 'processing' || job.status === 'queued') {
+          this.startPollingJob(jobId);
+        }
+      } else {
+        this.showToast('Failed to refresh job', 'error');
+      }
+    } catch (err) {
+      this.showToast('Failed to refresh job', 'error');
+    }
   }
 
   async downloadJob(jobId) {
@@ -348,16 +691,49 @@ class STLConverter {
   }
 
   previewSTL(file) {
-    // Show toast that we're loading
     this.showToast('Loading 3D preview...', 'info');
-    
+
     const reader = new FileReader();
-    
+    const fileName = file.name.toLowerCase();
+
     reader.onload = (e) => {
       try {
-        const loader = new THREE.STLLoader();
-        const geometry = loader.parse(e.target.result);
+        let geometry;
         
+        if (fileName.endsWith('.3mf')) {
+          // Load 3MF
+          const loader = new THREE.ThreeMFLoader();
+          const object = loader.parse(e.target.result);
+          
+          // Extract geometry from first mesh found
+          let mesh = null;
+          object.traverse((child) => {
+            if (child.isMesh && !mesh) {
+              mesh = child;
+            }
+          });
+          
+          if (!mesh) {
+            throw new Error('No mesh found in 3MF file');
+          }
+          
+          geometry = mesh.geometry;
+          
+          // Remove vertex colors if they exist - they override material color and cause black appearance
+          if (geometry.attributes.color) {
+            geometry.deleteAttribute('color');
+          }
+          
+          // Ensure normals exist for proper lighting
+          if (!geometry.attributes.normal) {
+            geometry.computeVertexNormals();
+          }
+        } else {
+          // Load STL
+          const loader = new THREE.STLLoader();
+          geometry = loader.parse(e.target.result);
+        }
+
         // Remove existing mesh
         if (this.mesh) {
           this.scene.remove(this.mesh);
@@ -365,9 +741,10 @@ class STLConverter {
           this.mesh.material.dispose();
         }
 
-        // Create material
+        // Create material - use brighter color for 3MF
+        const is3MF = fileName.endsWith('.3mf');
         const material = new THREE.MeshPhongMaterial({
-          color: 0x1d9bf0,
+          color: is3MF ? 0x00ff88 : 0x1d9bf0,  // Bright green for 3MF, blue for STL
           specular: 0x444444,
           shininess: 30,
           flatShading: false,
@@ -375,13 +752,13 @@ class STLConverter {
 
         // Create mesh
         this.mesh = new THREE.Mesh(geometry, material);
-        
+
         // Center the model
         geometry.computeBoundingBox();
         const center = new THREE.Vector3();
         geometry.boundingBox.getCenter(center);
         geometry.center();
-        
+
         // Scale to fit view
         const size = new THREE.Vector3();
         geometry.boundingBox.getSize(size);
@@ -401,7 +778,7 @@ class STLConverter {
 
         this.showToast('3D preview loaded!', 'success');
       } catch (err) {
-        console.error('Failed to load STL:', err);
+        console.error('Failed to load file:', err);
         this.showToast('Failed to load 3D preview', 'error');
       }
     };
@@ -421,19 +798,19 @@ class STLConverter {
 
   toggleWireframe() {
     if (!this.mesh) return;
-    
+
     this.wireframeMode = !this.wireframeMode;
     this.mesh.material.wireframe = this.wireframeMode;
-    
+
     this.toggleWireframeBtn.classList.toggle('active', this.wireframeMode);
   }
 
   handleResize() {
     if (!this.renderer || !this.camera) return;
-    
+
     const width = this.previewContainer.clientWidth;
     const height = this.previewContainer.clientHeight;
-    
+
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
@@ -514,21 +891,21 @@ class STLConverter {
   showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    
+
     const icons = {
       success: 'fa-check-circle',
       error: 'fa-exclamation-circle',
       warning: 'fa-exclamation-triangle',
       info: 'fa-info-circle',
     };
-    
+
     toast.innerHTML = `
       <i class="fas ${icons[type] || icons.info}"></i>
       <span>${this.escapeHtml(message)}</span>
     `;
-    
+
     this.toastContainer.appendChild(toast);
-    
+
     setTimeout(() => {
       toast.style.animation = 'slideIn 0.3s ease reverse';
       setTimeout(() => toast.remove(), 300);
@@ -556,6 +933,8 @@ class STLConverter {
       processing: '<i class="fas fa-spinner fa-spin"></i>',
       completed: '<i class="fas fa-check"></i>',
       failed: '<i class="fas fa-times"></i>',
+      timeout: '<i class="fas fa-clock"></i>',
+      expired: '<i class="fas fa-hourglass-end"></i>',
     };
     return icons[status] || '';
   }
