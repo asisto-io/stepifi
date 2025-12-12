@@ -18,18 +18,6 @@ app.disable('x-powered-by'); // optional
 
 app.use(cors());
 app.use(express.json());
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: config.rateLimit.windowMs,
-  max: config.rateLimit.max,
-  message: { success: false, error: 'Too many requests.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-app.use('/api/', limiter);
-
 // Static frontend
 app.use(express.static(path.join(__dirname, '../public')));
 
