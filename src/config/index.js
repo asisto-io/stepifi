@@ -24,17 +24,23 @@ module.exports = {
 
   // Upload settings
   upload: {
-    maxFileSize: parseInt(process.env.MAX_FILE_SIZE, 10) || 100 * 1024 * 1024, // 100MB
+    maxFileSize: parseInt(process.env.MAX_FILE_SIZE, 10) || 500 * 1024 * 1024, // 500MB
     allowedMimeTypes: [
+      // STL mime types
       'application/sla',
       'application/vnd.ms-pki.stl',
       'application/x-navistyle',
       'model/stl',
       'model/x.stl-ascii',
       'model/x.stl-binary',
-      'application/octet-stream', // Binary STL often detected as this
+      // 3MF mime types
+      'application/vnd.ms-package.3dmanufacturing-3dmodel+xml',
+      'model/3mf',
+      'application/x-3mf',
+      // Generic
+      'application/octet-stream', // Binary files often detected as this
     ],
-    allowedExtensions: ['.stl'],
+    allowedExtensions: ['.stl', '.3mf'],
   },
 
   // Conversion settings
@@ -42,7 +48,7 @@ module.exports = {
     defaultTolerance: parseFloat(process.env.DEFAULT_TOLERANCE) || 0.01,
     minTolerance: 0.001,
     maxTolerance: 1.0,
-    timeout: parseInt(process.env.CONVERSION_TIMEOUT, 10) || 300000, // 5 minutes
+    timeout: parseInt(process.env.CONVERSION_TIMEOUT, 10) || 1800000, // 30 minutes
     repairMesh: process.env.REPAIR_MESH !== 'false', // Default true
   },
 
@@ -50,14 +56,14 @@ module.exports = {
   jobs: {
     ttlHours: parseInt(process.env.JOB_TTL_HOURS, 10) || 24,
     cleanupCron: process.env.CLEANUP_CRON || '*/15 * * * *',
-    maxConcurrent: parseInt(process.env.MAX_CONCURRENT_JOBS, 10) || 2,
+    maxConcurrent: 1,
     maxRetries: parseInt(process.env.MAX_RETRIES, 10) || 2,
   },
 
   // Rate limiting
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 15 * 60 * 1000, // 15 minutes
-    max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 20, // 20 requests per window
+    max: parseInt(process.env.RATE_LIMIT_MAX, 10) || 1000, // 1000 requests per window
   },
 
   // Logging
