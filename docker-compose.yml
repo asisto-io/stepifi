@@ -25,6 +25,8 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - dokploy-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
@@ -38,6 +40,8 @@ services:
     volumes:
       - redis_data:/data
     restart: unless-stopped
+    networks:
+      - dokploy-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -48,3 +52,7 @@ volumes:
   uploads:
   converted:
   redis_data:
+
+networks:
+  dokploy-network:
+    external: true
